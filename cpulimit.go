@@ -82,20 +82,39 @@ func (l *Limiter) Start() {
 	)
 }
 
+// lifted from gopsutil/cpu
+func getAllBusy(t cpu.TimesStat) (float64, float64) {
+	busy := t.User + t.System + t.Nice + t.Iowait + t.Irq +
+		t.Softirq + t.Steal + t.Guest + t.GuestNice + t.Stolen
+	return busy + t.Idle, busy
+}
+
+func calculatePercent(ts1, ts0 cpu.TimesStat) float64 {
+	all1, busy1 := getAllBusy(ts1)
+	all0, busy0 := getAllBusy(ts0)
+	return (busy1 - busy0) / (all1 - all0) * 100
+}
+
 func (l *Limiter) run(measure, decide *time.Ticker, n int) {
 	output := l.C
 	measurements := make([]float64, n)
+	ts0, err := cpu.Times(false)
+	if err != nil {
+		panic(err)
+	}
 	var i int
 	var a float64
 	for {
 		select {
 		case <-measure.C:
-			m, err := cpu.Percent(0, false)
+			ts1, err := cpu.Times(false)
 			if err != nil {
 				panic(err)
 			}
+			m := calculatePercent(ts1[0], ts0[0])
+			ts0 = ts1
 			i = (i + 1) % len(measurements)
-			measurements[i] = m[0]
+			measurements[i] = m
 		case <-decide.C:
 			if a = average(measurements); a >= l.MaxCPUUsage {
 				output = l.H
